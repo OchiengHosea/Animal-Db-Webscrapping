@@ -1,4 +1,5 @@
 import time
+import asyncio
 from selenium import webdriver
 from selenium.webdriver.chrome import options
 import constants as CONSTANTS
@@ -8,6 +9,10 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
+from concurrent.futures.thread import ThreadPoolExecutor
+import urllib.request
+import os
+from pathlib import Path
 
 chrome_options = Options()
 class ScrapAnimalKingdom:
@@ -15,10 +20,36 @@ class ScrapAnimalKingdom:
         self.driver = webdriver.Chrome()
         self.driver.set_script_timeout(20)
         self.driver.set_page_load_timeout(20)
+        self.active_category = None
+        self.active_url = None
+        self.active_animal = None
+        self.extract_total_number = lambda string : string.split('(')[1].replace(")", "")
+        self.active_page = {
+            'next_page_href':None,
+            'page_members_div': None,
+            'total_number':0,
+            'page_members':[]
+        }
 
-        self.active_category = CONSTANTS.CLASSES['vertebrates']['Birds']
+        self.executor = ThreadPoolExecutor(10)
+    
+    def init_page(self):
+        self.active_page['next_page_href'] = self.driver.find_element_by_xpath(CONSTANTS.PATHS.get('pagination_xpath')).text
+        self.active_page['page_members_div'] = self.driver.find_element_by_xpath(CONSTANTS.PATHS.get('cat_page_mbrs_xpath'))
+        self.active_page['total_number'] = self.extract_total_number(self.driver.find_element_by_xpath(CONSTANTS.PATHS.get('total_number_in_category_xpath')).text)
+        cat_page_members = self.active_page['page_members_div'].find_elements(By.TAG_NAME, "li")
+        self.active_page['page_members'] = [
+                {
+                    'name': cat_page_members[index].find_element(By.TAG_NAME, 'a').get_attribute('title'),
+                    'link': cat_page_members[index].find_element(By.TAG_NAME, 'a').get_attribute('href')
+                }
+            for index in range(len(cat_page_members))]
+        
+        # print(next_page_href.text, total_number.text, len(page_members))
+    def set_active_category(self, category):
+        self.active_category = category
         self.active_url = f"{CONSTANTS.BASE_URL}/wiki/Category:{self.active_category}"
-
+        
     def get_headline_details(self):
         headlines = ['h2', 'h3', 'h4', 'h5', 'h6']
         topic_details = []
@@ -30,9 +61,6 @@ class ScrapAnimalKingdom:
         return topic_details
 
     def get_animal_details(self):
-        # get description
-        print(self.active_url, "Getting details")
-        
         try:
             category_div = self.driver.find_element(By.CLASS_NAME, 'categories')
             category_list = category_div.find_elements(By.TAG_NAME, 'li')
@@ -49,14 +77,12 @@ class ScrapAnimalKingdom:
             topics_titles = [el.text for el in topics_el]
             
             initial_topics = dict(zip(topics_titles, self.get_headline_details()))
-            # import pdb
-            # pdb.set_trace()
             print("="*20+"Initital topics"+"="*20)
             print(initial_topics)
         except Exception as e:
             print("no initital topics either")
 
-
+        # get description
         try:
             description = []
             actual_descr_div = self.driver.find_element(By.CLASS_NAME, "mw-parser-output")
@@ -65,29 +91,45 @@ class ScrapAnimalKingdom:
                     description.append(el.text)
                 if el.tag_name == 'h2':
                     break
+            print("="*20+"Description"+"="*20)
+            print(description)
+            print("*"*20)
         except Exception as e:
-            print("Cant get details")
+            print("Couldnt get description")
 
-        print("="*20+"Description"+"="*20)
-        print(description)
-        print("*"*20)
-        # print(topics)
+        # get classification
+        try:
+            div = self.driver.find_element(By.CLASS_NAME, "mw-parser-output")
+            table = self.driver.find_element(By.CSS_SELECTOR, "table")
+            rows = table.find_elements(By.TAG_NAME, "tr")
+            img_src = rows[1].find_element(By.TAG_NAME, "img").get_attribute("src")
+            file_name = f'{self.active_category}_{self.active_animal.replace(" ", "_")}'
+            urllib.request.urlretrieve(img_src, f"imgs/{file_name}.jpeg")
+            classification = {}
+            for row in rows:
+                tds = row.find_elements(By.TAG_NAME, "td")
+                if len(tds) > 1:
+                    classification.update({tds[0].text:tds[1].text})
+            
+            status = rows[-1].text
+
+            print("="*20+"Classification"+"="*20)
+            print(classification, status)
+        except Exception as e:
+            print("Couldn't get classification", e)
 
     def find_animal_category_details(self):
         print(f"Ready: finding {self.active_category}")
-
-        next_page_href = self.driver.find_element_by_xpath(CONSTANTS.PATHS.get('pagination_xpath'))
-        page_members_div = self.driver.find_element_by_xpath(CONSTANTS.PATHS.get('cat_page_mbrs_xpath'))
-        total_number = self.driver.find_element_by_xpath(CONSTANTS.PATHS.get('total_number_in_category_xpath'))
-        cat_page_members = page_members_div.find_elements(By.TAG_NAME, "li")
-
-
-        print(next_page_href.text, total_number.text, len(cat_page_members))
-        index = 3
-        link = cat_page_members[index].find_element(By.XPATH, f'//*[@id="mw-content-text"]/div[3]/div[1]/ul/li[{index}]/a')
-        self.active_url = link.get_attribute('href')
-        
-        self.open_active_link(self.get_animal_details)
+        self.init_page()
+        time.sleep(2)
+        print(self.active_page['total_number'], len(self.active_page['page_members']), self.active_page['page_members'][0])
+        loop = asyncio.get_event_loop()
+        for i in range(len(self.active_page['page_members'][:3])):
+            self.active_url = self.active_page['page_members'][i]['link']
+            self.active_animal = self.active_page['page_members'][i]['name']
+            time.sleep(2)
+            self.open_active_link(self.get_animal_details)
+            
 
     def open_active_link(self, callback):
         try:
@@ -101,6 +143,8 @@ class ScrapAnimalKingdom:
             ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
             callback()
             
+            
 if __name__ == '__main__':
     scrapper = ScrapAnimalKingdom()
+    scrapper.set_active_category(CONSTANTS.CLASSES['vertebrates']['Birds'])
     scrapper.open_active_link(scrapper.find_animal_category_details)
