@@ -34,16 +34,18 @@ class ScrapAnimalKingdom:
         self.executor = ThreadPoolExecutor(10)
     
     def init_page(self):
-        self.active_page['next_page_href'] = self.driver.find_element_by_xpath(CONSTANTS.PATHS.get('pagination_xpath')).text
-        self.active_page['page_members_div'] = self.driver.find_element_by_xpath(CONSTANTS.PATHS.get('cat_page_mbrs_xpath'))
-        self.active_page['total_number'] = self.extract_total_number(self.driver.find_element_by_xpath(CONSTANTS.PATHS.get('total_number_in_category_xpath')).text)
+        self.active_page['next_page_href'] = self.driver.find_elements(By.CLASS_NAME, 'category-page__pagination-next')[0].get_attribute('href')
+        self.active_page['page_members_div'] = self.driver.find_element(By.ID, 'content')
+        self.active_page['total_number'] = self.extract_total_number(self.driver.find_element(By.CLASS_NAME, 'category-page__total-number').text)
         cat_page_members = self.active_page['page_members_div'].find_elements(By.TAG_NAME, "li")
+        get_name = lambda i : cat_page_members[i].find_element(By.TAG_NAME, 'a').get_attribute('title')
+        get_link = lambda i : cat_page_members[i].find_element(By.TAG_NAME, 'a').get_attribute('href')
         self.active_page['page_members'] = [
                 {
-                    'name': cat_page_members[index].find_element(By.TAG_NAME, 'a').get_attribute('title'),
-                    'link': cat_page_members[index].find_element(By.TAG_NAME, 'a').get_attribute('href')
+                    'name': get_name(index),
+                    'link': get_link(index)
                 }
-            for index in range(len(cat_page_members))]
+            for index in range(len(cat_page_members)) if get_link(index) is not None and get_name(index) is not None]
         
         # print(next_page_href.text, total_number.text, len(page_members))
     def set_active_category(self, category):
@@ -124,11 +126,27 @@ class ScrapAnimalKingdom:
         time.sleep(2)
         print(self.active_page['total_number'], len(self.active_page['page_members']), self.active_page['page_members'][0])
         loop = asyncio.get_event_loop()
-        for i in range(len(self.active_page['page_members'][:3])):
-            self.active_url = self.active_page['page_members'][i]['link']
-            self.active_animal = self.active_page['page_members'][i]['name']
-            time.sleep(2)
+        index = 0
+        while index < len(self.active_page['page_members']):
+            self.active_url = self.active_page['page_members'][index]['link']
+            self.active_animal = self.active_page['page_members'][index]['name']
+            time.sleep(1)
             self.open_active_link(self.get_animal_details)
+            remaining = len(self.active_page["page_members"]) - index
+            print(index, f"{remaining} to go")
+            index += 1
+        else:
+            time.sleep(1)
+            index = 0
+            self.active_url = self.active_page['next_page_href']
+            print(self.active_url)
+            self.open_active_link(self.find_animal_category_details)
+
+        # for i in range(len(self.active_page['page_members'][:3])):
+        #     self.active_url = self.active_page['page_members'][i]['link']
+        #     self.active_animal = self.active_page['page_members'][i]['name']
+        #     time.sleep(2)
+        #     self.open_active_link(self.get_animal_details)
             
 
     def open_active_link(self, callback):
