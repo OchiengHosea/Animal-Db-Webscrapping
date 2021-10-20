@@ -13,6 +13,8 @@ from concurrent.futures.thread import ThreadPoolExecutor
 import urllib.request
 import os
 from pathlib import Path
+import requests
+import json
 
 chrome_options = Options()
 class ScrapAnimalKingdom:
@@ -35,7 +37,7 @@ class ScrapAnimalKingdom:
     
     def init_page(self):
         self.active_page['next_page_href'] = self.driver.find_elements(By.CLASS_NAME, 'category-page__pagination-next')[0].get_attribute('href')
-        self.active_page['page_members_div'] = self.driver.find_element(By.ID, 'content')
+        self.active_page['page_members_div'] = self.driver.find_elements(By.CLASS_NAME, 'category-page__members')[0]
         self.active_page['total_number'] = self.extract_total_number(self.driver.find_element(By.CLASS_NAME, 'category-page__total-number').text)
         cat_page_members = self.active_page['page_members_div'].find_elements(By.TAG_NAME, "li")
         get_name = lambda i : cat_page_members[i].find_element(By.TAG_NAME, 'a').get_attribute('title')
@@ -67,8 +69,8 @@ class ScrapAnimalKingdom:
             category_div = self.driver.find_element(By.CLASS_NAME, 'categories')
             category_list = category_div.find_elements(By.TAG_NAME, 'li')
             categories = [categ.get_attribute('data-name') for categ in category_list if categ.get_attribute('data-name') is not None]
-            print("="*20+"Categories"+"="*20)
-            print(categories)
+            # print("="*20+"Categories"+"="*20)
+            # print(categories)
         except Exception as e:
             print(f"No categories for {self.active_url}")
         # recursively get the topic sub topic details
@@ -79,8 +81,8 @@ class ScrapAnimalKingdom:
             topics_titles = [el.text for el in topics_el]
             
             initial_topics = dict(zip(topics_titles, self.get_headline_details()))
-            print("="*20+"Initital topics"+"="*20)
-            print(initial_topics)
+            # print("="*20+"Initital topics"+"="*20)
+            # print(initial_topics)
         except Exception as e:
             print("no initital topics either")
 
@@ -93,32 +95,84 @@ class ScrapAnimalKingdom:
                     description.append(el.text)
                 if el.tag_name == 'h2':
                     break
-            print("="*20+"Description"+"="*20)
-            print(description)
-            print("*"*20)
+            # print("="*20+"Description"+"="*20)
+            # print(description)
+            # print("*"*20)
         except Exception as e:
             print("Couldnt get description")
 
         # get classification
         try:
-            div = self.driver.find_element(By.CLASS_NAME, "mw-parser-output")
+            # div = self.driver.find_element(By.CLASS_NAME, "mw-parser-output")
             table = self.driver.find_element(By.CSS_SELECTOR, "table")
             rows = table.find_elements(By.TAG_NAME, "tr")
             img_src = rows[1].find_element(By.TAG_NAME, "img").get_attribute("src")
             file_name = f'{self.active_category}_{self.active_animal.replace(" ", "_")}'
             urllib.request.urlretrieve(img_src, f"imgs/{file_name}.jpeg")
-            classification = {}
+            classification = dict()
+            
             for row in rows:
                 tds = row.find_elements(By.TAG_NAME, "td")
                 if len(tds) > 1:
-                    classification.update({tds[0].text:tds[1].text})
+                    classification.update({tds[0].text.lower():tds[1].text})
             
             status = rows[-1].text
 
-            print("="*20+"Classification"+"="*20)
-            print(classification, status)
+            classification["conservationStatus"] = status
+            
+            animal = {
+                "name":self.active_animal,
+                "description":''.join(description),
+                "animalDetails":initial_topics,
+                "categories":categories
+            }
+            # print("="*20+"Classification"+"="*20)
+            # print(classification, status)
+            time.sleep(3)
+            self.post_animal(classification, animal)
         except Exception as e:
             print("Couldn't get classification", e)
+
+    def post_animal(self, classification, animal):
+        print(" "*40)
+        print("***"*30+"Animal Details"+"***"*30)
+        print(" "*40)
+        
+        classes = ["kingdom","phylum","a_class","a_order","family","genus","species"]
+        otherDetails = {}
+        n_classification = {}
+
+        for key in classification:
+            if key == "class" or key == "order":
+                n_key = f"a_{key}"
+                n_classification[n_key] = classification.get(key)
+
+        for classif in classification:
+            if classif not in classes:
+                otherDetails[classif] = classification.get(classif)
+            else:
+                n_classification[classif] = classification.get(classif)
+
+        n_classification["otherDetails"] = otherDetails
+        n_classification["conservationStatus"] = classification.get("status")
+        # print(animal)
+        print(" "*40)
+        # print(n_classification)
+        classification_url = "http://4e91-102-69-231-18.ngrok.io/api/animal_classification"
+        animal_url = "http://4e91-102-69-231-18.ngrok.io/api/animals"
+        headers = {
+            'Authorization': 'Bearer eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJkdWtlIiwiaWF0IjoxNjM0NzI0MDk4LCJleHAiOjE2MzQ4MTA0OTh9.O0pJ6-oGOkw9DzyOcix0RQ_IdI7oyMNsIkrFvHYxZCCrl0XwWl2N7ocUaEybWfZSJeUzsaQuL8jxZmcNgErjyQ',
+            'Content-Type': 'application/json'
+        }
+
+        classification_payload = json.dumps(n_classification)
+        class_resp = requests.post(classification_url, data=classification_payload, headers=headers)
+        class_resp = class_resp.json()
+        print(class_resp)
+        animal['classification_id'] = class_resp['id']
+        animal_payload = json.dumps(animal)
+        animal_resp = requests.post(animal_url, data=animal_payload, headers=headers)
+        print(animal_resp.json())
 
     def find_animal_category_details(self):
         print(f"Ready: finding {self.active_category}")
@@ -130,7 +184,7 @@ class ScrapAnimalKingdom:
         while index < len(self.active_page['page_members']):
             self.active_url = self.active_page['page_members'][index]['link']
             self.active_animal = self.active_page['page_members'][index]['name']
-            time.sleep(1)
+            time.sleep(2)
             self.open_active_link(self.get_animal_details)
             remaining = len(self.active_page["page_members"]) - index
             print(index, f"{remaining} to go")
